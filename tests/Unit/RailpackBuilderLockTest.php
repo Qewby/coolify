@@ -10,13 +10,17 @@ function runRailpackLockScript(string $command, string $setup = ''): Process
     mkdir($directory);
 
     try {
-        $script = str_replace('/root/.docker/buildx/coolify-railpack.lock', $directory.'/builder.lock', $setup.railpackBuilderLockedScript($command));
+        $script = str_replace(
+            ['/root/.docker/buildx/coolify-railpack.lock', '/root/.docker/buildx/coolify-railpack-bootstrap.lock'],
+            [$directory.'/builder.lock', $directory.'/bootstrap.lock'],
+            $setup.railpackBuilderLockedScript($command),
+        );
         $process = new Process(['bash', '-c', $script]);
         $process->run();
 
         return $process;
     } finally {
-        @unlink($directory.'/builder.lock');
+        array_map('unlink', glob($directory.'/*'));
         rmdir($directory);
     }
 }
@@ -40,6 +44,20 @@ test('a held shared lock prevents stopping the builder', function () {
 
     expect($process->getExitCode())->toBe(0);
     expect($process->getOutput())->toBe('built');
+});
+
+test('the cache prune skips a builder that does not exist', function () {
+    $process = runRailpackLockScript(railpackBuilderPruneScript(), 'exec 3>&1; docker() { printf "%s " "$2" >&3; [ "$2" != inspect ] || [ "$3" = --bootstrap ]; }; ');
+
+    expect($process->getExitCode())->toBe(0);
+    expect($process->getOutput())->toBe('inspect stop ');
+});
+
+test('the cache prune starts and prunes an existing builder', function () {
+    $process = runRailpackLockScript(railpackBuilderPruneScript(), 'exec 3>&1; docker() { printf "%s " "$2" >&3; }; ');
+
+    expect($process->getExitCode())->toBe(0);
+    expect($process->getOutput())->toBe('inspect inspect prune stop ');
 });
 
 test('concurrent builds bootstrap the builder one at a time', function () {
